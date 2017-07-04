@@ -295,6 +295,80 @@ class Connector
 		// Get the signed URI from the Request object
 		return $request->getAuthenticatedURL($lifetime, $https);
 	}
+	
+	/**
+	* Get object or bucket Access Control Policy
+	*
+	* @param string $bucket Bucket name
+	* @param string $uri Object URI
+	* @return mixed | false
+	*/
+	public function getAccessControlPolicy($bucket, $uri = '')
+	{
+		$request = new Request('GET', $bucket, '', $this->configuration);
+		
+		$request->setParameter('acl', null);
+		
+		$response = $request->getResponse();
+
+		if (!$response->error->isError() && $response->code !== 200)
+		{
+			$response->error = new Error(
+				$response->code,
+				"Unexpected HTTP status {$response->code}"
+			);
+		}
+
+		if ($response->error->isError())
+		{
+			throw new CannotGetBucket(
+				sprintf(__METHOD__ . "(): [%s] %s", $response->error->getCode(), $response->error->getMessage()),
+				$response->error->getCode()
+			);
+		}
+
+		$acp = array();
+		
+		if ($response->hasBody() && isset($response->body->Owner, $response->body->Owner->ID)) 
+		{
+			$acp['owner'] = array(
+				'id' => (string) $response->body->Owner->ID
+			);
+		}
+
+		if ($response->hasBody() && isset($response->body->AccessControlList))
+		{
+			$acp['acl'] = array();
+			
+			foreach ($response->body->AccessControlList->Grant as $grant)
+			{
+				foreach ($grant->Grantee as $grantee)
+				{
+					if (isset($grantee->ID)) // CanonicalUser
+						$acp['acl'][] = array(
+							'type' => 'CanonicalUser',
+							'id' => (string)$grantee->ID,
+							'permission' => (string)$grant->Permission
+						);
+					elseif (isset($grantee->EmailAddress)) // AmazonCustomerByEmail
+						$acp['acl'][] = array(
+							'type' => 'AmazonCustomerByEmail',
+							'email' => (string)$grantee->EmailAddress,
+							'permission' => (string)$grant->Permission
+						);
+					elseif (isset($grantee->URI)) // Group
+						$acp['acl'][] = array(
+							'type' => 'Group',
+							'uri' => (string)$grantee->URI,
+							'permission' => (string)$grant->Permission
+						);
+					else continue;
+				}
+			}
+		}
+		
+		return $acp;
+	}
 
 	/**
 	 * Get the location (region) of a bucket. You need this to use the V4 API on that bucket!
